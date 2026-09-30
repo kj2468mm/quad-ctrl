@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Quadruped Controller</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;700&display=swap');
+  :root{
+    --bg:#060608; --card:#0d1117; --line:#161b22; --dim:#3d444d;
+    --txt:#c9d1d9; --mut:#6e7681;
+    --blue:#58a6ff; --grn:#3fb950; --org:#f0883e; --red:#f85149; --pur:#d2a8ff;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;
+    -webkit-user-select:none;user-select:none;touch-action:none}
+  html,body{height:100%;overscroll-behavior:none}
+  body{background:var(--bg);color:var(--txt);
+       font-family:'JetBrains Mono',ui-monospace,monospace;
+       display:flex;flex-direction:column;
+       padding:calc(env(safe-area-inset-top) + 8px) 10px
+               calc(env(safe-area-inset-bottom) + 10px);gap:8px}
+
+  .bar{display:flex;gap:8px;align-items:center}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--red);flex:none}
+  .dot.on{background:var(--grn)}
+  .bar .nm{font-size:0.6rem;color:var(--mut);flex:1;
+           overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+  button{font-family:inherit;color:var(--txt);background:var(--card);
+         border:1px solid var(--line);border-radius:9px;
+         font-size:0.64rem;padding:8px 11px;transition:background .06s}
+  button:active{background:#1b2028}
+  button.pri{border-color:#1f6feb;color:var(--blue)}
+  button.on{background:#f0883e22;border-color:var(--org);color:var(--org)}
+
+  .seg{display:flex;background:var(--card);border:1px solid var(--line);
+       border-radius:9px;overflow:hidden;flex:none}
+  .seg button{border:0;border-radius:0;background:transparent;
+              font-size:0.62rem;padding:8px 15px;color:var(--dim)}
+  .seg button.sel{background:#16202c;color:var(--blue)}
+
+  .stage{flex:1;display:flex;gap:9px;align-items:stretch;min-height:0}
+  .zone{background:var(--card);border:1px solid var(--line);border-radius:12px;
+        padding:10px;display:flex;flex-direction:column;gap:8px;
+        align-items:center;justify-content:center}
+  .zl{font-size:0.52rem;letter-spacing:.14em;color:var(--dim);text-transform:uppercase}
+  .left{flex:1;min-width:0}
+  .mid {flex:none;width:132px}
+  .rgt {flex:none;width:74px}
+
+  .pad{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;
+       width:100%;max-width:210px;aspect-ratio:1}
+  .pad button{border-radius:12px;font-size:1.2rem;line-height:1;padding:0;
+              display:flex;align-items:center;justify-content:center}
+  .pad .mid0{background:#0a0c10;border:1px dashed var(--line);border-radius:12px;
+             color:var(--dim);font-size:.5rem;
+             display:flex;align-items:center;justify-content:center}
+  .pad button.hit{background:#1f6feb22;border-color:var(--blue);color:var(--blue)}
+
+  .tpad{position:relative;width:100%;max-width:210px;aspect-ratio:1;
+        background:#0a0c10;border:1px solid var(--line);border-radius:14px;
+        overflow:hidden}
+  .tpad .ax{position:absolute;background:var(--line)}
+  .tpad .axh{left:8%;right:8%;top:50%;height:1px}
+  .tpad .axv{top:8%;bottom:8%;left:50%;width:1px}
+  .tpad .knob{position:absolute;width:44px;height:44px;border-radius:50%;
+              background:#1f6feb33;border:2px solid var(--blue);
+              transform:translate(-50%,-50%);left:50%;top:50%}
+  .tpad .cap{position:absolute;font-size:.5rem;color:var(--dim)}
+  .cap.t{top:5px;left:50%;transform:translateX(-50%)}
+  .cap.b{bottom:5px;left:50%;transform:translateX(-50%)}
+  .cap.l{left:5px;top:50%;transform:translateY(-50%)}
+  .cap.r{right:5px;top:50%;transform:translateY(-50%)}
+
+  .turn{display:flex;gap:6px;width:100%}
+  .turn button{flex:1;height:64px;border-radius:12px;font-size:1.35rem;padding:0}
+  .turn button.hit{background:#f0883e22;border-color:var(--org);color:var(--org)}
+
+  .yw{width:100%;display:flex;flex-direction:column;gap:2px;align-items:center}
+  .yw .ends{display:flex;justify-content:space-between;width:100%;
+            font-size:.62rem;color:var(--dim)}
+
+  .vwrap{position:relative;flex:1;width:100%;min-height:150px;
+         display:flex;align-items:center;justify-content:center}
+  .vwrap input{position:absolute}
+  .arrow{font-size:.7rem;color:var(--dim)}
+
+  input[type=range]{-webkit-appearance:none;appearance:none;height:34px;
+                    background:transparent;width:100%}
+  input[type=range]::-webkit-slider-runnable-track{height:5px;border-radius:3px;
+                    background:#21262d}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:28px;height:28px;
+                    margin-top:-11.5px;border-radius:50%;background:var(--blue);
+                    border:2px solid #0d1117}
+  input[type=range]::-moz-range-track{height:5px;border-radius:3px;background:#21262d}
+  input[type=range]::-moz-range-thumb{width:26px;height:26px;border-radius:50%;
+                    background:var(--blue);border:2px solid #0d1117}
+  #s_ty::-webkit-slider-thumb{background:var(--pur)}
+  #s_h::-webkit-slider-thumb{background:#79c0ff}
+
+  .val{font-size:.62rem;color:var(--txt)}
+  .out{font-size:0.55rem;color:var(--mut);line-height:1.7;
+       background:#0a0c10;border:1px solid #21262d;border-radius:8px;padding:7px}
+  .hide{display:none !important}
+  .grow{flex:1}
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <div class="dot" id="dot"></div>
+  <div class="nm" id="nm">disconnected</div>
+  <button class="pri" id="btn_conn">연결</button>
+</div>
+
+<div class="bar">
+  <div class="seg">
+    <button id="m0" class="sel">보행</button>
+    <button id="m1">틸트</button>
+  </div>
+  <button id="btn_boost">BOOST</button>
+  <div class="grow"></div>
+  <button id="btn_stop">정지</button>
+</div>
+
+<div class="stage">
+
+  <div class="zone left">
+    <div class="zl" id="zl_left">방향  x / z</div>
+
+    <div class="pad" id="pan0">
+      <div></div>
+      <button data-k="up">▲</button>
+      <div></div>
+      <button data-k="lf">◀</button>
+      <div class="mid0">x z</div>
+      <button data-k="rt">▶</button>
+      <div></div>
+      <button data-k="dn">▼</button>
+      <div></div>
+    </div>
+
+    <div class="tpad hide" id="pan1">
+      <div class="ax axh"></div>
+      <div class="ax axv"></div>
+      <div class="cap t">pitch +</div>
+      <div class="cap b">pitch −</div>
+      <div class="cap l">roll +</div>
+      <div class="cap r">roll −</div>
+      <div class="knob" id="knob"></div>
+    </div>
+  </div>
+
+  <div class="zone mid">
+    <div class="zl" id="zl_mid">회전  r</div>
+
+    <div class="turn" id="rot0">
+      <button data-k="ccw">↺</button>
+      <button data-k="cw">↻</button>
+    </div>
+
+    <div class="yw hide" id="rot1">
+      <input type="range" id="s_ty" min="-12" max="12" step="1" value="0">
+      <div class="ends"><span>↺</span><span>↻</span></div>
+    </div>
+
+    <div class="val" id="v_mid">0</div>
+  </div>
+
+  <div class="zone rgt">
+    <div class="zl">높이</div>
+    <div class="arrow">▲</div>
+    <div class="vwrap" id="vwrap">
+      <input type="range" id="s_h" min="-300" max="300" step="5" value="0">
+    </div>
+    <div class="arrow">▼</div>
+    <div class="val" id="v_h">0.0</div>
+    <button id="btn_h0" style="width:100%;padding:6px 0">0</button>
+  </div>
+
+</div>
+
+<div class="out" id="out">—</div>
+
+<script>
+/* ==================== config ====================
+   mirrors controller_win2.py                      */
+const TX_HZ     = 30.0;
+
+const RAMP      = 10;      // walk, units per frame while held
+const RAMP_BACK = 4;       // walk, units per frame while released
+const RAMP_T    = 1.0;     // tilt, deg per frame while held
+const RAMP_T_B  = 2.0;     // tilt, deg per frame while released
+
+const VX_MAX = 50, VX_MIN = -50;
+const VZ_MAX = 30;
+const VR_MAX = 20;
+const BOOST  = 2;          // multiplier on vec_x only
+
+const TR_MAX = 15;
+const TP_MAX = 7;
+const TY_MAX = 12;
+const AD_MAX = 300;        // tenths of a mm
+/* ================================================ */
+
+const S = {m:0, vx:0, vz:0, vr:0, tr:0, tp:0, ty:0, a:0, h:0};
+const T = {vx:0, vz:0, vr:0, tr:0, tp:0, ty:0};   // ramp targets
+
+let boost = false;
+let dev = null, rxc = null, connected = false;
+let txBusy = false, txPend = false, lastStr = '';
+const $ = id => document.getElementById(id);
+
+function clamp(v, lo, hi){ return v < lo ? lo : (v > hi ? hi : v); }
+
+function approach(cur, tgt, up, down){
+  if (tgt === 0){
+    if (cur > 0) return Math.max(0, cur - down);
+    if (cur < 0) return Math.min(0, cur + down);
+    return 0;
+  }
+  if (cur < tgt) return Math.min(tgt, cur + up);
+  if (cur > tgt) return Math.max(tgt, cur - up);
+  return cur;
+}
+
+/* ---------------- vertical slider sizing ---------------- */
+function sizeV(){
+  const h = $('vwrap').clientHeight;
+  const el = $('s_h');
+  el.style.width = h + 'px';
+  el.style.transform = 'rotate(-90deg)';
+}
+window.addEventListener('resize', sizeV);
+
+/* ---------------- BLE ---------------- */
+const SVC = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+const RXC = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
+
+async function connect(){
+  if (!navigator.bluetooth){
+    $('nm').textContent = 'Web Bluetooth 미지원';
+    return;
+  }
+  try{
+    $('nm').textContent = 'scanning...';
+    dev = await navigator.bluetooth.requestDevice({
+      filters:[{services:[SVC]}, {namePrefix:'QUAD'}],
+      optionalServices:[SVC]
+    });
+    dev.addEventListener('gattserverdisconnected', onDrop);
+    const srv = await dev.gatt.connect();
+    const s   = await srv.getPrimaryService(SVC);
+    rxc = await s.getCharacteristic(RXC);
+    connected = true;
+    $('dot').classList.add('on');
+    $('nm').textContent = dev.name || 'connected';
+    $('btn_conn').textContent = '해제';
+  }catch(e){
+    $('nm').textContent = 'fail: ' + e.message;
+  }
+}
+function onDrop(){
+  connected = false; rxc = null;
+  $('dot').classList.remove('on');
+  $('nm').textContent = 'disconnected';
+  $('btn_conn').textContent = '연결';
+}
+function disconnect(){
+  if (dev && dev.gatt.connected) dev.gatt.disconnect();
+  onDrop();
+}
+$('btn_conn').onclick = () => connected ? disconnect() : connect();
+
+/* ---------------- tx ---------------- */
+function frame(){
+  return `${S.m},${S.vx},${S.vz},${S.vr},${S.tr},${S.tp},${S.ty},${S.a},${S.h}\n`;
+}
+async function send(force){
+  const str = frame();
+  if (!force && str === lastStr) return;
+  lastStr = str;
+  if (!connected || !rxc) return;
+  if (txBusy){ txPend = true; return; }
+  txBusy = true;
+  try{ await rxc.writeValueWithoutResponse(new TextEncoder().encode(str)); }
+  catch(e){}
+  txBusy = false;
+  if (txPend){ txPend = false; send(true); }
+}
+
+/* ---------------- 30 Hz tick ---------------- */
+let fvx = 0, fvz = 0, fvr = 0, ftr = 0, ftp = 0, fty = 0;
+
+function tick(){
+  const hi = VX_MAX * (boost ? BOOST : 1);
+  const lo = VX_MIN * (boost ? BOOST : 1);
+
+  if (S.m === 0){
+    T.vx = (held.has('up') ? hi : 0) + (held.has('dn') ? lo : 0);
+    T.vz = (held.has('lf') ?  VZ_MAX : 0) + (held.has('rt') ? -VZ_MAX : 0);
+    T.vr = (held.has('ccw') ? VR_MAX : 0) + (held.has('cw') ? -VR_MAX : 0);
+
+    fvx = approach(fvx, T.vx, RAMP, RAMP_BACK);
+    fvz = approach(fvz, T.vz, RAMP, RAMP_BACK);
+    fvr = approach(fvr, T.vr, RAMP, RAMP_BACK);
+
+    S.vx = Math.round(clamp(fvx, lo, hi));
+    S.vz = Math.round(clamp(fvz, -VZ_MAX, VZ_MAX));
+    S.vr = Math.round(clamp(fvr, -VR_MAX, VR_MAX));
+    S.tr = S.tp = S.ty = 0;
+  }else{
+    if (tDrag){
+      ftr = T.tr; ftp = T.tp;          // direct while touching
+    }else{
+      ftr = approach(ftr, 0, RAMP_T, RAMP_T_B);
+      ftp = approach(ftp, 0, RAMP_T, RAMP_T_B);
+    }
+    if (yDrag){
+      fty = T.ty;
+    }else{
+      fty = approach(fty, 0, RAMP_T, RAMP_T_B);
+      $('s_ty').value = Math.round(fty);
+    }
+    S.tr = Math.round(clamp(ftr, -TR_MAX, TR_MAX));
+    S.tp = Math.round(clamp(ftp, -TP_MAX, TP_MAX));
+    S.ty = Math.round(clamp(fty, -TY_MAX, TY_MAX));
+    S.vx = S.vz = S.vr = 0;
+    knobTo(-S.tr / TR_MAX, S.tp / TP_MAX);
+  }
+
+  paint();
+  send(true);
+}
+setInterval(tick, 1000 / TX_HZ);
+
+/* ---------------- paint ---------------- */
+function paint(){
+  $('v_mid').textContent = S.m === 0 ? S.vr : S.ty;
+  $('v_h').textContent   = (S.h/10).toFixed(1);
+  $('out').textContent =
+    S.m === 0
+      ? `보행  vx ${S.vx}  vz ${S.vz}  vr ${S.vr}  h ${(S.h/10).toFixed(1)}mm` +
+        (boost ? '  BOOST' : '')
+      : `틸트  roll ${S.tr}  pitch ${S.tp}  yaw ${S.ty}  h ${(S.h/10).toFixed(1)}mm`;
+}
+
+/* ---------------- mode ---------------- */
+function clearAll(){
+  fvx = fvz = fvr = ftr = ftp = fty = 0;
+  T.vx = T.vz = T.vr = T.tr = T.tp = T.ty = 0;
+  S.vx = S.vz = S.vr = S.tr = S.tp = S.ty = 0;
+  $('s_ty').value = 0;
+  held.clear(); tDrag = false; yDrag = false;
+  document.querySelectorAll('.pad button, .turn button')
+          .forEach(b => b.classList.remove('hit'));
+  knobTo(0, 0);
+}
+function setMode(m){
+  S.m = m; clearAll();
+  $('m0').classList.toggle('sel', m === 0);
+  $('m1').classList.toggle('sel', m === 1);
+  $('pan0').classList.toggle('hide', m !== 0);
+  $('pan1').classList.toggle('hide', m === 0);
+  $('rot0').classList.toggle('hide', m !== 0);
+  $('rot1').classList.toggle('hide', m === 0);
+  $('zl_left').textContent = m === 0 ? '방향  x / z' : '틸트  roll / pitch';
+  $('zl_mid').textContent  = m === 0 ? '회전  r'     : 'yaw';
+  paint(); send(true);
+}
+$('m0').onclick = () => setMode(0);
+$('m1').onclick = () => setMode(1);
+$('btn_stop').onclick = () => { clearAll(); paint(); send(true); };
+$('btn_h0').onclick = () => { S.h = 0; $('s_h').value = 0; paint(); send(true); };
+$('btn_boost').onclick = () => {
+  boost = !boost;
+  $('btn_boost').classList.toggle('on', boost);
+  paint();
+};
+
+/* ---------------- d-pad ---------------- */
+const held = new Set();
+document.querySelectorAll('.pad button[data-k], .turn button[data-k]')
+.forEach(b => {
+  const k = b.dataset.k;
+  const on  = e => { e.preventDefault(); b.setPointerCapture?.(e.pointerId);
+                     held.add(k); b.classList.add('hit'); };
+  const off = e => { e.preventDefault(); held.delete(k);
+                     b.classList.remove('hit'); };
+  b.addEventListener('pointerdown',   on);
+  b.addEventListener('pointerup',     off);
+  b.addEventListener('pointercancel', off);
+  b.addEventListener('pointerleave',  off);
+});
+
+/* ---------------- 2d tilt pad ---------------- */
+const tpad = $('pan1'), knob = $('knob');
+let tDrag = false;
+
+function knobTo(nx, ny){
+  knob.style.left = (50 + nx*40) + '%';
+  knob.style.top  = (50 - ny*40) + '%';
+}
+function tFromEvent(e){
+  const r = tpad.getBoundingClientRect();
+  let nx = clamp((e.clientX - r.left) / r.width  * 2 - 1, -1, 1);
+  let ny = clamp(1 - (e.clientY - r.top) / r.height * 2, -1, 1);
+  T.tr = -nx * TR_MAX;
+  T.tp =  ny * TP_MAX;
+}
+tpad.addEventListener('pointerdown', e => {
+  e.preventDefault(); tDrag = true;
+  tpad.setPointerCapture(e.pointerId); tFromEvent(e);
+});
+tpad.addEventListener('pointermove', e => { if (tDrag){ e.preventDefault(); tFromEvent(e);} });
+['pointerup','pointercancel','pointerleave'].forEach(ev =>
+  tpad.addEventListener(ev, () => { tDrag = false; }));
+
+/* ---------------- yaw slider ---------------- */
+const sy = $('s_ty');
+let yDrag = false;
+sy.addEventListener('pointerdown', () => { yDrag = true; });
+sy.addEventListener('input', () => { T.ty = +sy.value; fty = T.ty; });
+['pointerup','pointercancel','touchend','mouseup']
+  .forEach(ev => sy.addEventListener(ev, () => { yDrag = false; T.ty = 0; }));
+
+/* ---------------- height slider ---------------- */
+$('s_h').addEventListener('input', () => { S.h = +$('s_h').value; paint(); });
+
+setMode(0);
+requestAnimationFrame(sizeV);
+setTimeout(sizeV, 200);
+</script>
+</body>
+</html>
