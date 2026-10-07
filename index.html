@@ -20,6 +20,17 @@
        padding:calc(env(safe-area-inset-top) + 8px) 10px
                calc(env(safe-area-inset-bottom) + 10px);gap:8px}
 
+  /* camera layer -- sits behind every control */
+  #cam{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;
+       z-index:-1;opacity:0;transition:opacity .2s;background:#000}
+  #cam.on{opacity:1}
+  body.cam .zone{background:#0d1117cc;backdrop-filter:blur(2px)}
+  body.cam .out{background:#0a0a0fcc}
+  body.cam .tpad{background:#0a0c10cc}
+  button.rec{border-color:var(--red);color:var(--red)}
+  button.rec.live{background:#f8514922;animation:blink 1s infinite}
+  @keyframes blink{50%{opacity:.45}}
+
   .bar{display:flex;gap:8px;align-items:center}
   .dot{width:9px;height:9px;border-radius:50%;background:var(--red);flex:none}
   .dot.on{background:var(--grn)}
@@ -107,6 +118,8 @@
 </head>
 <body>
 
+<video id="cam" playsinline muted autoplay></video>
+
 <div class="bar">
   <div class="dot" id="dot"></div>
   <div class="nm" id="nm">disconnected</div>
@@ -120,6 +133,9 @@
   </div>
   <button id="btn_boost">BOOST</button>
   <div class="grow"></div>
+  <button id="btn_cam">📷</button>
+  <button id="btn_flip" style="display:none">⟲</button>
+  <button id="btn_rec" class="rec" style="display:none">⏺</button>
   <button id="btn_stop">정지</button>
 </div>
 
@@ -426,6 +442,97 @@ sy.addEventListener('input', () => { T.ty = +sy.value; fty = T.ty; });
 
 /* ---------------- height slider ---------------- */
 $('s_h').addEventListener('input', () => { S.h = +$('s_h').value; paint(); });
+
+/* ---------------- camera + recorder ---------------- */
+let stream = null, facing = 'environment';
+let rec = null, chunks = [], recT0 = 0;
+
+async function camOn(){
+  camOff();
+  try{
+    stream = await navigator.mediaDevices.getUserMedia({
+      video:{ facingMode: facing, width:{ideal:1280}, height:{ideal:720} },
+      audio:false
+    });
+  }catch(e){
+    $('nm').textContent = 'cam: ' + e.name;
+    return;
+  }
+  const v = $('cam');
+  v.srcObject = stream;
+  v.classList.add('on');
+  document.body.classList.add('cam');
+  $('btn_cam').classList.add('on');
+  $('btn_flip').style.display = '';
+  $('btn_rec').style.display  = '';
+}
+
+function camOff(){
+  if (rec && rec.state !== 'inactive') rec.stop();
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  stream = null;
+  $('cam').srcObject = null;
+  $('cam').classList.remove('on');
+  document.body.classList.remove('cam');
+  $('btn_cam').classList.remove('on');
+  $('btn_flip').style.display = 'none';
+  $('btn_rec').style.display  = 'none';
+}
+
+$('btn_cam').onclick  = () => stream ? camOff() : camOn();
+$('btn_flip').onclick = () => {
+  facing = (facing === 'environment') ? 'user' : 'environment';
+  if (stream) camOn();
+};
+
+function pickMime(){
+  const c = ['video/mp4;codecs=avc1',
+             'video/webm;codecs=vp9',
+             'video/webm;codecs=vp8',
+             'video/webm'];
+  for (const m of c) if (MediaRecorder.isTypeSupported(m)) return m;
+  return '';
+}
+
+$('btn_rec').onclick = () => {
+  if (!stream) return;
+  if (rec && rec.state === 'recording'){ rec.stop(); return; }
+  const mime = pickMime();
+  try{ rec = new MediaRecorder(stream, mime ? {mimeType:mime} : undefined); }
+  catch(e){ $('nm').textContent = 'rec: ' + e.name; return; }
+  chunks = [];
+  rec.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+  rec.onstop = () => {
+    $('btn_rec').classList.remove('live');
+    $('btn_rec').textContent = '⏺';
+    if (!chunks.length) return;
+    const type = rec.mimeType || 'video/webm';
+    const ext  = type.includes('mp4') ? 'mp4' : 'webm';
+    const url  = URL.createObjectURL(new Blob(chunks, {type}));
+    const a    = document.createElement('a');
+    a.href = url;
+    a.download = 'quad_' + new Date().toISOString()
+                 .replace(/[-:T]/g,'').slice(0,14) + '.' + ext;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  };
+  rec.start(1000);
+  recT0 = Date.now();
+  $('btn_rec').classList.add('live');
+};
+
+setInterval(() => {
+  if (rec && rec.state === 'recording'){
+    const s = Math.floor((Date.now() - recT0)/1000);
+    $('btn_rec').textContent =
+      `${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
+  }
+}, 500);
+
+/* keep the link alive if the page is hidden anyway -- zero the robot */
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden){ clearAll(); paint(); send(true); }
+});
 
 setMode(0);
 requestAnimationFrame(sizeV);
