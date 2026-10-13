@@ -203,15 +203,15 @@
    mirrors controller_win2.py                      */
 const TX_HZ     = 30.0;
 
-const RAMP      = 10;      // walk, units per frame while held
-const RAMP_BACK = 4;       // walk, units per frame while released
+const RAMP      = 30;      // walk, mm/s per frame while held
+const RAMP_BACK = 12;      // walk, mm/s per frame while released
 const RAMP_T    = 1.0;     // tilt, deg per frame while held
 const RAMP_T_B  = 2.0;     // tilt, deg per frame while released
 
-const VX_MAX = 50, VX_MIN = -50;
-const VZ_MAX = 30;
+const VX_MAX = 150, VX_MIN = -150;   // mm/s
+const VZ_MAX = 90;                   // mm/s
 const VR_MAX = 20;
-const BOOST  = 2;          // multiplier on vec_x only
+const BOOST  = 250/150;    // vec_x 150 -> 250 mm/s
 
 const TR_MAX = 15;
 const TP_MAX = 7;
