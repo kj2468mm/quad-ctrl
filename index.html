@@ -207,13 +207,13 @@ const TX_HZ     = 30.0;
 
 const RAMP      = 30;      // walk, mm/s per frame while held
 const RAMP_BACK = 12;      // walk, mm/s per frame while released
-const TILT_FULL = 0.2;     // tilt, seconds for 0 -> MAX (rate limit, held and released)
-const APP_VER   = 'v7';
+const TILT_FULL = 0.35;    // tilt, seconds for 0 -> MAX (rate limit, held and released)
+const APP_VER   = 'v8';
 
-const VX_MAX = 450, VX_MIN = -450;   // mm/s
+const VX_MAX = 300, VX_MIN = -300;   // mm/s
 const VZ_MAX = 150;                   // mm/s
 const VR_MAX = 20;
-const BOOST  = 550/450;    // vec_x 150 -> 250 mm/s
+const BOOST  = 500/300;    // vec_x 300 -> 500 mm/s
 
 const TR_MAX = 15;
 const TP_MAX = 7;
