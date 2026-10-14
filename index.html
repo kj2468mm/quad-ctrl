@@ -124,6 +124,8 @@
     .rgt{width:96px}
     .hrow{flex-direction:row;gap:6px}
     .hrow button{flex:1}
+    .left .pad{flex:1 1 0;min-height:0;height:auto;width:auto;max-width:100%;
+               max-height:210px}       /* fit pad inside zone */
   }
 </style>
 </head>
@@ -219,8 +221,8 @@ const TX_HZ     = 30.0;
 
 const WALK_UP   = 0.17;    // walk, seconds for 0 -> base MAX while held
 const WALK_DN   = 0.42;    // walk, seconds for base MAX -> 0 when released
-const TILT_FULL = 0.35;    // tilt, seconds for 0 -> MAX (rate limit, held and released)
-const APP_VER   = 'v10';
+const TILT_FULL = 0.3;     // tilt, seconds for 0 -> MAX (rate limit, held and released)
+const APP_VER   = 'v11';
 
 const VX_MAX = 300, VX_MIN = -300;   // mm/s
 const VZ_MAX = 150;                   // mm/s
