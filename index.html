@@ -217,10 +217,10 @@
    mirrors controller_win2.py                      */
 const TX_HZ     = 30.0;
 
-const RAMP      = 30;      // walk, mm/s per frame while held
-const RAMP_BACK = 12;      // walk, mm/s per frame while released
+const WALK_UP   = 0.17;    // walk, seconds for 0 -> base MAX while held
+const WALK_DN   = 0.42;    // walk, seconds for base MAX -> 0 when released
 const TILT_FULL = 0.35;    // tilt, seconds for 0 -> MAX (rate limit, held and released)
-const APP_VER   = 'v9';
+const APP_VER   = 'v10';
 
 const VX_MAX = 300, VX_MIN = -300;   // mm/s
 const VZ_MAX = 150;                   // mm/s
@@ -336,9 +336,10 @@ function tick(){
     T.vz = (held.has('lf') ?  VZ_MAX : 0) + (held.has('rt') ? -VZ_MAX : 0);
     T.vr = (held.has('ccw') ? VR_MAX : 0) + (held.has('cw') ? -VR_MAX : 0);
 
-    fvx = approach(fvx, T.vx, RAMP, RAMP_BACK);
-    fvz = approach(fvz, T.vz, RAMP, RAMP_BACK);
-    fvr = approach(fvr, T.vr, RAMP, RAMP_BACK);
+    const ku = 1 / (WALK_UP * TX_HZ), kd = 1 / (WALK_DN * TX_HZ);
+    fvx = approach(fvx, T.vx, VX_MAX * ku, VX_MAX * kd);
+    fvz = approach(fvz, T.vz, VZ_MAX * ku, VZ_MAX * kd);
+    fvr = approach(fvr, T.vr, VR_MAX * ku, VR_MAX * kd);
 
     S.vx = Math.round(clamp(fvx, lo, hi));
     S.vz = Math.round(clamp(fvz, -VZ_MAX, VZ_MAX));
