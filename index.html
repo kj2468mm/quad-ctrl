@@ -59,6 +59,7 @@
   .left{flex:1;min-width:0}
   .mid {flex:none;width:132px}
   .rgt {flex:none;width:74px}
+  .hrow{display:flex;flex-direction:column;gap:8px;width:100%;align-items:center}
 
   .pad{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;
        width:100%;max-width:210px;aspect-ratio:1}
@@ -115,6 +116,15 @@
        background:#0a0c10;border:1px solid #21262d;border-radius:8px;padding:7px}
   .hide{display:none !important}
   .grow{flex:1}
+  @media (orientation:landscape){
+    .mid.wide{width:200px}               /* yaw slider ~1.6x */
+    .zone{min-height:0;padding:8px}
+    .vwrap{min-height:40px}
+    .rgt .arrow{display:none}
+    .rgt{width:96px}
+    .hrow{flex-direction:row;gap:6px}
+    .hrow button{flex:1}
+  }
 </style>
 </head>
 <body>
@@ -192,8 +202,10 @@
       <input type="range" id="s_h" min="-300" max="300" step="5" value="0">
     </div>
     <div class="arrow">▼</div>
-    <div class="val" id="v_h">0.0</div>
-    <button id="btn_h0" style="width:100%;padding:6px 0">0</button>
+    <div class="hrow">
+      <div class="val" id="v_h">0.0</div>
+      <button id="btn_h0" style="width:100%;padding:6px 0">0</button>
+    </div>
   </div>
 
 </div>
@@ -208,7 +220,7 @@ const TX_HZ     = 30.0;
 const RAMP      = 30;      // walk, mm/s per frame while held
 const RAMP_BACK = 12;      // walk, mm/s per frame while released
 const TILT_FULL = 0.35;    // tilt, seconds for 0 -> MAX (rate limit, held and released)
-const APP_VER   = 'v8';
+const APP_VER   = 'v9';
 
 const VX_MAX = 300, VX_MIN = -300;   // mm/s
 const VZ_MAX = 150;                   // mm/s
@@ -380,6 +392,7 @@ function setMode(m){
   $('pan1').classList.toggle('hide', m === 0);
   $('rot0').classList.toggle('hide', m !== 0);
   $('rot1').classList.toggle('hide', m === 0);
+  document.querySelector('.zone.mid').classList.toggle('wide', m === 1);
   $('zl_left').textContent = m === 0 ? '방향  x / z' : '틸트  roll / pitch';
   $('zl_mid').textContent  = m === 0 ? '회전  r'     : 'yaw';
   paint(); send(true);
