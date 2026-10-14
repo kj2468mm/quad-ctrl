@@ -32,6 +32,7 @@
   @keyframes blink{50%{opacity:.45}}
 
   .bar{display:flex;gap:8px;align-items:center}
+  .ver{font-size:0.55rem;color:var(--mut);opacity:.7}
   .dot{width:9px;height:9px;border-radius:50%;background:var(--red);flex:none}
   .dot.on{background:var(--grn)}
   .bar .nm{font-size:0.6rem;color:var(--mut);flex:1;
@@ -123,6 +124,7 @@
 <div class="bar">
   <div class="dot" id="dot"></div>
   <div class="nm" id="nm">disconnected</div>
+  <div class="ver" id="ver"></div>
   <button class="pri" id="btn_conn">연결</button>
 </div>
 
@@ -205,8 +207,8 @@ const TX_HZ     = 30.0;
 
 const RAMP      = 30;      // walk, mm/s per frame while held
 const RAMP_BACK = 12;      // walk, mm/s per frame while released
-const RAMP_T    = 1.0;     // tilt, deg per frame while held
-const RAMP_T_B  = 2.0;     // tilt, deg per frame while released
+const TILT_FULL = 0.5;     // tilt, seconds for 0 -> MAX (rate limit, held and released)
+const APP_VER   = 'v6';
 
 const VX_MAX = 450, VX_MIN = -450;   // mm/s
 const VZ_MAX = 150;                   // mm/s
@@ -229,6 +231,11 @@ const $ = id => document.getElementById(id);
 
 function clamp(v, lo, hi){ return v < lo ? lo : (v > hi ? hi : v); }
 
+function slew(cur, tgt, d){
+  if (tgt > cur + d) return cur + d;
+  if (tgt < cur - d) return cur - d;
+  return tgt;
+}
 function approach(cur, tgt, up, down){
   if (tgt === 0){
     if (cur > 0) return Math.max(0, cur - down);
@@ -326,18 +333,11 @@ function tick(){
     S.vr = Math.round(clamp(fvr, -VR_MAX, VR_MAX));
     S.tr = S.tp = S.ty = 0;
   }else{
-    if (tDrag){
-      ftr = T.tr; ftp = T.tp;          // direct while touching
-    }else{
-      ftr = approach(ftr, 0, RAMP_T, RAMP_T_B);
-      ftp = approach(ftp, 0, RAMP_T, RAMP_T_B);
-    }
-    if (yDrag){
-      fty = T.ty;
-    }else{
-      fty = approach(fty, 0, RAMP_T, RAMP_T_B);
-      $('s_ty').value = Math.round(fty);
-    }
+    const k = 1 / (TILT_FULL * TX_HZ);     // fraction of MAX per frame
+    ftr = slew(ftr, tDrag ? T.tr : 0, TR_MAX * k);
+    ftp = slew(ftp, tDrag ? T.tp : 0, TP_MAX * k);
+    fty = slew(fty, yDrag ? T.ty : 0, TY_MAX * k);
+    if (!yDrag) $('s_ty').value = Math.round(fty);
     S.tr = Math.round(clamp(ftr, -TR_MAX, TR_MAX));
     S.tp = Math.round(clamp(ftp, -TP_MAX, TP_MAX));
     S.ty = Math.round(clamp(fty, -TY_MAX, TY_MAX));
@@ -410,6 +410,7 @@ document.querySelectorAll('.pad button[data-k], .turn button[data-k]')
 });
 
 /* ---------------- 2d tilt pad ---------------- */
+$('ver').textContent = APP_VER;
 const tpad = $('pan1'), knob = $('knob');
 let tDrag = false;
 
@@ -436,7 +437,7 @@ tpad.addEventListener('pointermove', e => { if (tDrag){ e.preventDefault(); tFro
 const sy = $('s_ty');
 let yDrag = false;
 sy.addEventListener('pointerdown', () => { yDrag = true; });
-sy.addEventListener('input', () => { T.ty = +sy.value; fty = T.ty; });
+sy.addEventListener('input', () => { T.ty = +sy.value; });
 ['pointerup','pointercancel','touchend','mouseup']
   .forEach(ev => sy.addEventListener(ev, () => { yDrag = false; T.ty = 0; }));
 
