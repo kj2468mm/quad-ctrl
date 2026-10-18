@@ -221,8 +221,9 @@ const TX_HZ     = 30.0;
 
 const WALK_UP   = 0.17;    // walk, seconds for 0 -> base MAX while held
 const WALK_DN   = 0.42;    // walk, seconds for base MAX -> 0 when released
-const TILT_FULL = 0.3;     // tilt, seconds for 0 -> MAX (rate limit, held and released)
-const APP_VER   = 'v18';
+const TILT_FULL = 0.2;     // roll / pitch, seconds for 0 -> MAX (rate limit, held and released)
+const YAW_FULL  = 0.3;     // yaw slider, seconds for 0 -> MAX
+const APP_VER   = 'v19';
 
 const VX_MAX = 300, VX_MIN = -300;   // mm/s
 const VZ_MAX = 250;                   // mm/s
@@ -361,7 +362,7 @@ function tick(){
     const k = 1 / (TILT_FULL * TX_HZ);     // fraction of MAX per frame
     ftr = slew(ftr, tDrag ? T.tr : 0, TR_MAX * k);
     ftp = slew(ftp, tDrag ? T.tp : 0, TP_MAX * k);
-    fty = slew(fty, yDrag ? T.ty : 0, TY_MAX * k);
+    fty = slew(fty, yDrag ? T.ty : 0, TY_MAX / (YAW_FULL * TX_HZ));
     if (!yDrag) $('s_ty').value = Math.round(fty);
     S.tr = Math.round(clamp(ftr, -TR_MAX, TR_MAX));
     S.tp = Math.round(clamp(ftp, -TP_MAX, TP_MAX));
