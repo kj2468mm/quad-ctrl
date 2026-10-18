@@ -190,7 +190,7 @@
     </div>
 
     <div class="yw hide" id="rot1">
-      <input type="range" id="s_ty" min="-12" max="12" step="1" value="0">
+      <input type="range" id="s_ty" min="-21" max="21" step="1" value="0">
       <div class="ends"><span>↺</span><span>↻</span></div>
     </div>
 
@@ -222,7 +222,7 @@ const TX_HZ     = 30.0;
 const WALK_UP   = 0.17;    // walk, seconds for 0 -> base MAX while held
 const WALK_DN   = 0.42;    // walk, seconds for base MAX -> 0 when released
 const TILT_FULL = 0.3;     // tilt, seconds for 0 -> MAX (rate limit, held and released)
-const APP_VER   = 'v17';
+const APP_VER   = 'v18';
 
 const VX_MAX = 300, VX_MIN = -300;   // mm/s
 const VZ_MAX = 250;                   // mm/s
@@ -463,6 +463,7 @@ tpad.addEventListener('pointermove', e => { if (tDrag){ e.preventDefault(); tFro
 
 /* ---------------- yaw slider ---------------- */
 const sy = $('s_ty');
+sy.min = -TY_MAX; sy.max = TY_MAX;   // keep the slider range tied to TY_MAX
 let yDrag = false;
 sy.addEventListener('pointerdown', () => { yDrag = true; });
 sy.addEventListener('input', () => { T.ty = +sy.value; });
