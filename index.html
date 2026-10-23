@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <title>Quadruped Controller</title>
 <link rel="manifest" href="./manifest.json">
+<script src="https://cdn.jsdelivr.net/npm/mp4-muxer@5.1.3/build/mp4-muxer.js"></script>
 <meta name="theme-color" content="#060608">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -229,7 +230,7 @@ const WALK_UP   = 0.17;    // walk, seconds for 0 -> base MAX while held
 const WALK_DN   = 0.42;    // walk, seconds for base MAX -> 0 when released
 const TILT_FULL = 0.125;    // roll / pitch, seconds for 0 -> MAX (rate limit, held and released)
 const YAW_FULL  = 0.3;     // yaw slider, seconds for 0 -> MAX
-const APP_VER   = 'v24';
+const APP_VER   = 'v25';
 
 const VX_MAX = 300, VX_MIN = -300;   // mm/s
 const VZ_MAX = 150;                   // mm/s
@@ -517,6 +518,7 @@ async function camOn(){
 }
 
 function camOff(){
+  if (mp4){ recUi(false); mp4Stop(); }
   if (rec && rec.state !== 'inactive') rec.stop();
   if (stream) stream.getTracks().forEach(t => t.stop());
   stream = null;
@@ -598,17 +600,144 @@ function fixWebmDuration(buf, durMs) {
   return null;
 }
 
-$('btn_rec').onclick = () => {
+function saveBlob(blob, ext){
+  const url = URL.createObjectURL(blob);
+  const a   = document.createElement('a');
+  a.href = url;
+  const d = new Date(), z = n => String(n).padStart(2, '0');   // local time, not UTC
+  a.download = `quad_${d.getFullYear()}${z(d.getMonth()+1)}${z(d.getDate())}_` +
+               `${z(d.getHours())}${z(d.getMinutes())}${z(d.getSeconds())}.${ext}`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+function recUi(on){
+  $('btn_rec').classList.toggle('live', on);
+  if (!on) $('btn_rec').textContent = '⏺';
+}
+
+/* ---- MP4 recorder: WebCodecs (H.264 + AAC) -> mp4-muxer, real capture timestamps ---- */
+let mp4 = null;      // {muxer, venc, aenc, readers, stopping}
+
+function canMp4(){
+  return typeof Mp4Muxer !== 'undefined' && 'VideoEncoder' in window &&
+         'MediaStreamTrackProcessor' in window;
+}
+
+async function mp4Start(){
+  const vt = stream.getVideoTracks()[0];
+  const at = stream.getAudioTracks()[0];
+  const vs = vt.getSettings();
+  const W = (vs.width  || 1280) & ~1, H = (vs.height || 720) & ~1;
+  const fps = Math.round(vs.frameRate || 30);
+
+  let vcfg = null;
+  for (const codec of ['avc1.640028', 'avc1.4D4028', 'avc1.42E028', 'avc1.42E01F']){
+    const c = {codec, width: W, height: H, bitrate: 6e6, framerate: fps,
+               avc: {format: 'avc'}};
+    try{ if ((await VideoEncoder.isConfigSupported(c)).supported){ vcfg = c; break; } }catch(e){}
+  }
+  if (!vcfg) return false;
+
+  let acfg = null, acodec = null;
+  if (at && 'AudioEncoder' in window){
+    const as = at.getSettings();
+    const sr = as.sampleRate || 48000, ch = Math.min(as.channelCount || 1, 2);
+    for (const [codec, mux] of [['mp4a.40.2', 'aac'], ['opus', 'opus']]){
+      const c = {codec, sampleRate: sr, numberOfChannels: ch, bitrate: 128000};
+      try{ if ((await AudioEncoder.isConfigSupported(c)).supported){ acfg = c; acodec = mux; break; } }catch(e){}
+    }
+  }
+
+  const muxer = new Mp4Muxer.Muxer({
+    target: new Mp4Muxer.ArrayBufferTarget(),
+    video: {codec: 'avc', width: W, height: H, frameRate: fps},
+    audio: acfg ? {codec: acodec, sampleRate: acfg.sampleRate,
+                   numberOfChannels: acfg.numberOfChannels} : undefined,
+    fastStart: 'in-memory',
+    firstTimestampBehavior: 'offset'
+  });
+
+  const venc = new VideoEncoder({
+    output: (c, m) => muxer.addVideoChunk(c, m),
+    error:  e => { $('nm').textContent = 'venc: ' + e.message; }
+  });
+  venc.configure(vcfg);
+
+  let aenc = null;
+  if (acfg){
+    aenc = new AudioEncoder({
+      output: (c, m) => muxer.addAudioChunk(c, m),
+      error:  e => { $('nm').textContent = 'aenc: ' + e.message; }
+    });
+    aenc.configure(acfg);
+  }
+
+  const st = {muxer, venc, aenc, readers: [], stopping: false, acodec};
+  mp4 = st;
+
+  const pump = async (track, onItem) => {
+    const r = new MediaStreamTrackProcessor({track}).readable.getReader();
+    st.readers.push(r);
+    while (!st.stopping){
+      const {value, done} = await r.read();
+      if (done) break;
+      if (st.stopping){ value.close(); break; }
+      onItem(value);
+    }
+  };
+
+  let n = 0, lastKey = -1e12;
+  st.vloop = pump(vt.clone ? vt : vt, f => {
+    const key = f.timestamp - lastKey >= 2e6;              // keyframe every 2 s
+    if (key) lastKey = f.timestamp;
+    if (venc.encodeQueueSize > 10){ f.close(); return; }   // encoder behind: drop, keep timing
+    venc.encode(f, {keyFrame: key});
+    f.close(); n++;
+  });
+  if (aenc){
+    st.aloop = pump(at, a => { aenc.encode(a); a.close(); });
+  }
+  return true;
+}
+
+async function mp4Stop(){
+  const st = mp4; if (!st) return;
+  st.stopping = true;
+  for (const r of st.readers){ try{ await r.cancel(); }catch(e){} }
+  try{ await st.venc.flush(); }catch(e){}
+  if (st.aenc){ try{ await st.aenc.flush(); }catch(e){} }
+  st.muxer.finalize();
+  const buf = st.muxer.target.buffer;
+  mp4 = null;
+  saveBlob(new Blob([buf], {type: 'video/mp4'}), 'mp4');
+}
+
+$('btn_rec').onclick = async () => {
   if (!stream) return;
+
+  // stop
+  if (mp4){ recUi(false); await mp4Stop(); return; }
   if (rec && rec.state === 'recording'){ rec.stop(); return; }
+
+  // start: MP4 via WebCodecs when available, MediaRecorder WebM otherwise
+  if (canMp4()){
+    try{
+      if (await mp4Start()){
+        recT0 = Date.now(); recUi(true);
+        $('nm').textContent = 'rec mp4' + (mp4.aenc ? ' + ' + mp4.acodec : ' (no audio)');
+        return;
+      }
+    }catch(e){ mp4 = null; $('nm').textContent = 'mp4: ' + e.message; }
+  }
+
   const mime = pickMime();
   try{ rec = new MediaRecorder(stream, mime ? {mimeType:mime} : undefined); }
   catch(e){ $('nm').textContent = 'rec: ' + e.name; return; }
   chunks = [];
   rec.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
   rec.onstop = async () => {
-    $('btn_rec').classList.remove('live');
-    $('btn_rec').textContent = '⏺';
+    recUi(false);
     if (!chunks.length) return;
     const durMs = Date.now() - recT0;
     const type = rec.mimeType || 'video/webm';
@@ -620,22 +749,16 @@ $('btn_rec').onclick = () => {
         if (fixed) blob = new Blob([fixed], {type});
       }catch(e){}
     }
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement('a');
-    a.href = url;
-    const d = new Date(), z = n => String(n).padStart(2, '0');   // local time, not UTC
-    a.download = `quad_${d.getFullYear()}${z(d.getMonth()+1)}${z(d.getDate())}_` +
-                 `${z(d.getHours())}${z(d.getMinutes())}${z(d.getSeconds())}.${ext}`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    saveBlob(blob, ext);
   };
   rec.start(1000);
   recT0 = Date.now();
-  $('btn_rec').classList.add('live');
+  recUi(true);
+  $('nm').textContent = 'rec ' + (rec.mimeType || 'webm');
 };
 
 setInterval(() => {
-  if (rec && rec.state === 'recording'){
+  if (mp4 || (rec && rec.state === 'recording')){
     const s = Math.floor((Date.now() - recT0)/1000);
     $('btn_rec').textContent =
       `${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
