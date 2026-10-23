@@ -229,7 +229,7 @@ const WALK_UP   = 0.17;    // walk, seconds for 0 -> base MAX while held
 const WALK_DN   = 0.42;    // walk, seconds for base MAX -> 0 when released
 const TILT_FULL = 0.125;    // roll / pitch, seconds for 0 -> MAX (rate limit, held and released)
 const YAW_FULL  = 0.3;     // yaw slider, seconds for 0 -> MAX
-const APP_VER   = 'v23';
+const APP_VER   = 'v24';
 
 const VX_MAX = 300, VX_MIN = -300;   // mm/s
 const VZ_MAX = 150;                   // mm/s
@@ -492,13 +492,22 @@ async function camOn(){
   try{
     stream = await navigator.mediaDevices.getUserMedia({
       video:{ facingMode: facing, width:{ideal:1280}, height:{ideal:720} },
-      audio:false
+      audio:true
     });
   }catch(e){
-    $('nm').textContent = 'cam: ' + e.name;
-    return;
+    try{                                   // no mic permission -> video only
+      stream = await navigator.mediaDevices.getUserMedia({
+        video:{ facingMode: facing, width:{ideal:1280}, height:{ideal:720} },
+        audio:false
+      });
+      $('nm').textContent = 'cam: no mic (' + e.name + ')';
+    }catch(e2){
+      $('nm').textContent = 'cam: ' + e2.name;
+      return;
+    }
   }
   const v = $('cam');
+  v.muted = true;                          // preview stays silent, the recording keeps the audio
   v.srcObject = stream;
   v.classList.add('on');
   document.body.classList.add('cam');
@@ -526,12 +535,67 @@ $('btn_flip').onclick = () => {
 };
 
 function pickMime(){
-  const c = ['video/mp4;codecs=avc1',
-             'video/webm;codecs=vp9',
-             'video/webm;codecs=vp8',
-             'video/webm'];
+  // WebM first: its duration gets patched on save. MP4 only as a fallback
+  const c = ['video/webm;codecs=vp9,opus',
+             'video/webm;codecs=vp8,opus',
+             'video/webm',
+             'video/mp4;codecs=avc1,mp4a.40.2',
+             'video/mp4'];
   for (const m of c) if (MediaRecorder.isTypeSupported(m)) return m;
   return '';
+}
+
+// patch Segment/Info/Duration into a MediaRecorder WebM (no Duration element written)
+function fixWebmDuration(buf, durMs) {
+  const u = new Uint8Array(buf);
+  const idLen = b => b & 0x80 ? 1 : b & 0x40 ? 2 : b & 0x20 ? 3 : b & 0x10 ? 4 : 0;
+  const readId = p => { const n = idLen(u[p]); let v = 0; for (let i = 0; i < n; i++) v = v * 256 + u[p + i]; return [v, n]; };
+  const readSize = p => {
+    let n = 1, m = 0x80; while (n <= 8 && !(u[p] & m)) { n++; m >>= 1; }
+    let v = u[p] & (m - 1), unk = v === m - 1;
+    for (let i = 1; i < n; i++) { v = v * 256 + u[p + i]; if (u[p + i] !== 0xff) unk = false; }
+    return [v, n, unk];
+  };
+  let p = 0;
+  let [id, n] = readId(p); if (id !== 0x1A45DFA3) return null;
+  let [sz, sn] = readSize(p + n); p += n + sn + sz;            // skip EBML header
+  [id, n] = readId(p); if (id !== 0x18538067) return null;     // Segment
+  const segSizePos = p + n; const [segSz, segSn, segUnk] = readSize(segSizePos);
+  p = segSizePos + segSn;
+  while (p < u.length) {
+    [id, n] = readId(p); if (!n) return null;
+    const [esz, esn] = readSize(p + n);
+    const body = p + n + esn;
+    if (id === 0x1549A966) {                                     // Info
+      let scale = 1000000, q = body;
+      while (q < body + esz) {
+        const [cid, cn] = readId(q); const [csz, csn] = readSize(q + cn); const cb = q + cn + csn;
+        if (cid === 0x2AD7B1) { scale = 0; for (let i = 0; i < csz; i++) scale = scale * 256 + u[cb + i]; }
+        if (cid === 0x4489) {                                    // Duration already there: overwrite
+          const dv = new DataView(buf, cb, csz);
+          if (csz === 8) dv.setFloat64(0, durMs * 1e6 / scale); else dv.setFloat32(0, durMs * 1e6 / scale);
+          return new Blob([u]);
+        }
+        q = cb + csz;
+      }
+      const dEl = new Uint8Array(11); dEl.set([0x44, 0x89, 0x88]);
+      new DataView(dEl.buffer).setFloat64(3, durMs * 1e6 / scale);
+      const newSz = esz + dEl.length;
+      const hdr = new Uint8Array(n + 8); hdr.set(u.subarray(p, p + n));
+      hdr[n] = 0x01; let s = newSz; for (let i = 7; i >= 1; i--) { hdr[n + i] = s & 0xff; s = Math.floor(s / 256); }
+      const parts = [u.subarray(0, p), hdr, u.subarray(body, body + esz), dEl, u.subarray(body + esz)];
+      if (!segUnk) {                                             // known Segment size: grow it
+        const grow = hdr.length + dEl.length - (n + esn);
+        let v = segSz + grow; const segHdr = new Uint8Array(segSn);
+        for (let i = segSn - 1; i >= 0; i--) { segHdr[i] = v & 0xff; v = Math.floor(v / 256); }
+        segHdr[0] |= 0x80 >> (segSn - 1);
+        parts[0] = new Uint8Array([...u.subarray(0, segSizePos), ...segHdr, ...u.subarray(segSizePos + segSn, p)]);
+      }
+      return new Blob(parts);
+    }
+    p = body + esz;
+  }
+  return null;
 }
 
 $('btn_rec').onclick = () => {
@@ -542,17 +606,26 @@ $('btn_rec').onclick = () => {
   catch(e){ $('nm').textContent = 'rec: ' + e.name; return; }
   chunks = [];
   rec.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
-  rec.onstop = () => {
+  rec.onstop = async () => {
     $('btn_rec').classList.remove('live');
     $('btn_rec').textContent = '⏺';
     if (!chunks.length) return;
+    const durMs = Date.now() - recT0;
     const type = rec.mimeType || 'video/webm';
     const ext  = type.includes('mp4') ? 'mp4' : 'webm';
-    const url  = URL.createObjectURL(new Blob(chunks, {type}));
+    let blob = new Blob(chunks, {type});
+    if (ext === 'webm'){
+      try{
+        const fixed = fixWebmDuration(await blob.arrayBuffer(), durMs);
+        if (fixed) blob = new Blob([fixed], {type});
+      }catch(e){}
+    }
+    const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
     a.href = url;
-    a.download = 'quad_' + new Date().toISOString()
-                 .replace(/[-:T]/g,'').slice(0,14) + '.' + ext;
+    const d = new Date(), z = n => String(n).padStart(2, '0');   // local time, not UTC
+    a.download = `quad_${d.getFullYear()}${z(d.getMonth()+1)}${z(d.getDate())}_` +
+                 `${z(d.getHours())}${z(d.getMinutes())}${z(d.getSeconds())}.${ext}`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 10000);
   };
