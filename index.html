@@ -123,7 +123,19 @@
        background:#0a0c10;border:1px solid #21262d;border-radius:8px;padding:7px}
   .hide{display:none !important}
   .grow{flex:1}
+  #btn_jump{position:relative;overflow:hidden;width:100%;padding:10px 0;margin-top:4px;
+            font-weight:700;letter-spacing:.04em;white-space:nowrap;border-radius:8px;
+            border:1px solid #f0883e;color:#f0883e;background:transparent}
+  #btn_jump .fill{position:absolute;inset:0;background:#f0883e66;transform:scaleX(0);transform-origin:left}
+  #btn_jump.hold .fill{transform:scaleX(1);transition:transform .5s linear}
+  #btn_jump span{position:relative}
+  #btn_jump.go,#btn_jump.go:disabled{background:#f0883e;color:#0d1117;border-color:#f0883e;opacity:1}
+  #btn_jump:disabled{opacity:.35;border-color:var(--line);color:inherit}
+  body.locked .seg, body.locked #btn_boost, body.locked .pad, body.locked .turn,
+  body.locked .tpad, body.locked .yw, body.locked .vwrap, body.locked #btn_h0{pointer-events:none;opacity:.35}
   @media (orientation:landscape){
+    .hrow{flex-wrap:wrap}
+    #btn_jump{flex:1 0 100%;margin-top:0}
     .mid.wide{width:200px}               /* yaw slider ~1.6x */
     .zone{min-height:0;padding:8px}
     .vwrap{min-height:40px}
@@ -214,6 +226,7 @@
     <div class="hrow">
       <div class="val" id="v_h">0.0</div>
       <button id="btn_h0" style="width:100%;padding:6px 0">0</button>
+      <button id="btn_jump"><i class="fill"></i><span>점프</span></button>
     </div>
   </div>
 
@@ -230,7 +243,7 @@ const WALK_UP   = 0.17;    // walk, seconds for 0 -> base MAX while held
 const WALK_DN   = 0.42;    // walk, seconds for base MAX -> 0 when released
 const TILT_FULL = 0.125;    // roll / pitch, seconds for 0 -> MAX (rate limit, held and released)
 const YAW_FULL  = 0.3;     // yaw slider, seconds for 0 -> MAX
-const APP_VER   = 'v28';
+const APP_VER   = 'v29';
 
 const VX_MAX = 350, VX_MIN = -350;   // mm/s
 const VZ_MAX = 150;                   // mm/s
@@ -389,7 +402,7 @@ function paint(){
   $('v_h').textContent   = (S.h/10).toFixed(1);
   $('out').textContent =
     S.m === 0
-      ? `보행  vx ${S.vx}  vz ${S.vz}  vr ${S.vr}  h ${(S.h/10).toFixed(1)}mm` +
+      ? `보행  vx ${S.vx}  vz ${S.vz}  vr ${S.vr}  h ${(S.h/10).toFixed(1)}mm  a ${S.a}` +
         (boost ? '  BOOST' : '')
       : `틸트  roll ${S.tr}  pitch ${S.tp}  yaw ${S.ty}  h ${(S.h/10).toFixed(1)}mm`;
   if (connected)
@@ -408,6 +421,7 @@ function clearAll(){
   knobTo(0, 0);
 }
 function setMode(m){
+  if (jumpLock) return;
   S.m = m; clearAll();
   $('m0').classList.toggle('sel', m === 0);
   $('m1').classList.toggle('sel', m === 1);
@@ -424,6 +438,37 @@ $('m0').onclick = () => setMode(0);
 $('m1').onclick = () => setMode(1);
 $('btn_stop').onclick = () => { clearAll(); paint(); send(true); };
 $('btn_h0').onclick = () => { S.h = 0; $('s_h').value = 0; paint(); send(true); };
+
+/* ---------------- jump: hold 0.5 s, then a = 1 pulse and a 2 s lock ---------------- */
+const JUMP_HOLD = 0.5, JUMP_PULSE = 0.3, JUMP_LOCK = 2.0;   // s
+const jb = $('btn_jump'), jlab = jb.querySelector('span');
+let jumpLock = false, jumpTimer = 0;
+function jumpReady(){
+  return S.m === 0 && !jumpLock && held.size === 0 && S.vx === 0 && S.vz === 0 && S.vr === 0;
+}
+function jumpUi(){ jb.disabled = !jumpReady() && !jb.classList.contains('hold'); }
+function jumpCancel(){ clearTimeout(jumpTimer); jb.classList.remove('hold'); }
+function jumpFire(){
+  jb.classList.remove('hold');
+  clearAll();
+  jumpLock = true; document.body.classList.add('locked');
+  S.a = 1; jb.classList.add('go'); jlab.textContent = '점프!';
+  paint(); send(true);
+  setTimeout(() => { S.a = 0; jb.classList.remove('go'); jlab.textContent = '대기';
+                     paint(); send(true); }, JUMP_PULSE*1000);
+  setTimeout(() => { jumpLock = false; document.body.classList.remove('locked');
+                     jlab.textContent = '점프'; jumpUi(); }, JUMP_LOCK*1000);
+  jumpUi();
+}
+jb.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  if (!jumpReady()) return;
+  jb.setPointerCapture?.(e.pointerId);
+  jb.classList.add('hold');
+  jumpTimer = setTimeout(jumpFire, JUMP_HOLD*1000);
+});
+['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => jb.addEventListener(ev, jumpCancel));
+setInterval(jumpUi, 100);
 $('btn_boost').onclick = () => {
   boost = !boost;
   $('btn_boost').classList.toggle('on', boost);
