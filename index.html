@@ -245,7 +245,7 @@ const WALK_UP   = 0.17;    // walk, seconds for 0 -> base MAX while held
 const WALK_DN   = 0.42;    // walk, seconds for base MAX -> 0 when released
 const TILT_FULL = 0.125;    // roll / pitch, seconds for 0 -> MAX (rate limit, held and released)
 const YAW_FULL  = 0.3;     // yaw slider, seconds for 0 -> MAX
-const APP_VER   = 'v32';
+const APP_VER   = 'v33';
 
 const VX_MAX = 350, VX_MIN = -350;   // mm/s
 const VZ_MAX = 150;                   // mm/s
@@ -374,8 +374,12 @@ function tick(){
     T.vr = (held.has('ccw') ? VR_MAX : 0) + (held.has('cw') ? -VR_MAX : 0);
 
     const ku = 1 / (WALK_UP * TX_HZ), kd = 1 / (WALK_DN * TX_HZ);
-    fvx = approach(fvx, T.vx, VX_MAX * ku, VX_MAX * kd);
-    fvz = approach(fvz, T.vz, VZ_MAX * ku, VZ_MAX * kd);
+    // slow down from the current limit in WALK_DN (BOOST speeds stop as fast as normal ones);
+    // leaving BOOST drops the speed to the normal limit at once
+    fvx = clamp(fvx, lo, hi);
+    fvz = clamp(fvz, -hz, hz);
+    fvx = approach(fvx, T.vx, VX_MAX * ku, Math.max(hi, -lo) * kd);
+    fvz = approach(fvz, T.vz, VZ_MAX * ku, hz * kd);
     fvr = approach(fvr, T.vr, VR_MAX * ku, VR_MAX * kd);
 
     S.vx = Math.round(clamp(fvx, lo, hi));
