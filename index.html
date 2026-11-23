@@ -245,7 +245,7 @@ const WALK_UP   = 0.17;    // walk, seconds for 0 -> base MAX while held
 const WALK_DN   = 0.42;    // walk, seconds for base MAX -> 0 when released
 const TILT_FULL = 0.125;    // roll / pitch, seconds for 0 -> MAX (rate limit, held and released)
 const YAW_FULL  = 0.3;     // yaw slider, seconds for 0 -> MAX
-const APP_VER   = 'v36';
+const APP_VER   = 'v37';
 
 const VX_MAX = 350, VX_MIN = -350;   // mm/s
 const VZ_MAX = 400;                   // mm/s
@@ -687,6 +687,14 @@ function canMp4(){
          'MediaStreamTrackProcessor' in window;
 }
 
+// 2026-11-24: two files with audio only. Cause: the video chunks had no duration and addVideoChunk() threw
+// in the encoder output callback (fixed above with addVideoChunkRaw). As a guard against any other silent
+// video failure (an encoder that accepts frames but never outputs), a watchdog checks the video output:
+//   no video chunk STALL_MS after start      -> retry once with a software baseline encoder
+//   still none, or an encoder error           -> drop the MP4 path and record WebM (MediaRecorder) instead
+//   output stops for STALL_MS mid-recording   -> new encoder with the same config (next frame is a keyframe)
+const STALL_MS = 2500;
+
 async function mp4Start(){
   const vt = stream.getVideoTracks()[0];
   const at = stream.getAudioTracks()[0];
@@ -721,22 +729,41 @@ async function mp4Start(){
     firstTimestampBehavior: 'offset'
   });
 
-  const venc = new VideoEncoder({
-    output: (c, m) => muxer.addVideoChunk(c, m),
-    error:  e => { $('nm').textContent = 'venc: ' + e.message; }
-  });
-  venc.configure(vcfg);
+  const st = {muxer, venc: null, aenc: null, readers: [], stopping: false, acodec,
+              vcfg, vin: 0, vout: 0, vdrop: 0, vfail: '', stage: 0,
+              tEnc: performance.now(), tOut: 0, lastKey: -1e12, wd: 0};
 
-  let aenc = null;
+  st.newVenc = cfg => {
+    if (st.venc){ try{ st.venc.close(); }catch(e){} }
+    const enc = new VideoEncoder({
+      output: (c, m) => {
+        if (enc !== st.venc) return;                       // late chunk from a replaced encoder
+        // camera frames from MediaStreamTrackProcessor can carry no duration, so the chunk duration is
+        // null and addVideoChunk() throws: pass the data raw with one frame period instead
+        const d = new Uint8Array(c.byteLength); c.copyTo(d);
+        const dur = (c.duration != null && c.duration >= 0) ? c.duration : Math.round(1e6 / fps);
+        muxer.addVideoChunkRaw(d, c.type, c.timestamp, dur, m); st.vout++; st.tOut = performance.now();
+      },
+      error: e => { if (enc === st.venc) st.vfail = e.message || 'error'; }
+    });
+    enc.configure(cfg);
+    st.venc = enc; st.vcfg = cfg; st.vfail = '';
+    st.tEnc = performance.now(); st.lastKey = -1e12;     // first frame of a new encoder is a keyframe
+  };
+  st.newVenc(vcfg);
+
   if (acfg){
-    aenc = new AudioEncoder({
-      output: (c, m) => muxer.addAudioChunk(c, m),
+    st.aenc = new AudioEncoder({
+      output: (c, m) => {
+        const d = new Uint8Array(c.byteLength); c.copyTo(d);
+        const dur = (c.duration != null && c.duration >= 0) ? c.duration : 0;
+        muxer.addAudioChunkRaw(d, c.type, c.timestamp, dur, m);
+      },
       error:  e => { $('nm').textContent = 'aenc: ' + e.message; }
     });
-    aenc.configure(acfg);
+    st.aenc.configure(acfg);
   }
 
-  const st = {muxer, venc, aenc, readers: [], stopping: false, acodec};
   mp4 = st;
 
   const pump = async (track, onItem) => {
@@ -746,34 +773,116 @@ async function mp4Start(){
       const {value, done} = await r.read();
       if (done) break;
       if (st.stopping){ value.close(); break; }
-      onItem(value);
+      try{ onItem(value); }catch(e){ try{ value.close(); }catch(e2){} }
     }
   };
 
-  let n = 0, lastKey = -1e12;
-  st.vloop = pump(vt.clone ? vt : vt, f => {
-    const key = f.timestamp - lastKey >= 2e6;              // keyframe every 2 s
-    if (key) lastKey = f.timestamp;
-    if (venc.encodeQueueSize > 10){ f.close(); return; }   // encoder behind: drop, keep timing
-    venc.encode(f, {keyFrame: key});
-    f.close(); n++;
+  st.vloop = pump(vt, f => {
+    const enc = st.venc;
+    st.vin++;
+    if (!enc || enc.state !== 'configured' || enc.encodeQueueSize > 10){
+      f.close(); st.vdrop++; return;                       // encoder behind or broken: drop, keep timing
+    }
+    const key = f.timestamp - st.lastKey >= 2e6;           // keyframe every 2 s
+    if (key) st.lastKey = f.timestamp;
+    enc.encode(f, {keyFrame: key});
+    f.close();
   });
-  if (aenc){
-    st.aloop = pump(at, a => { aenc.encode(a); a.close(); });
+  if (st.aenc){
+    st.aloop = pump(at, a => { st.aenc.encode(a); a.close(); });
   }
+
+  st.wd = setInterval(() => mp4Watch(st), 500);
   return true;
+}
+
+async function mp4Watch(st){
+  if (st !== mp4 || st.stopping || st.busy) return;
+  const now = performance.now();
+  const label = 'rec mp4' + (st.aenc ? ' + ' + st.acodec : ' (no audio)');
+  if (st.vout === 0 && (st.vfail || now - st.tEnc > STALL_MS)){
+    st.busy = true;
+    const why = st.vfail || 'no video output';
+    let sw = null;
+    if (st.stage === 0){
+      const c = {codec: 'avc1.42E01F', width: st.vcfg.width, height: st.vcfg.height, bitrate: 4e6,
+                 framerate: st.vcfg.framerate, avc: {format: 'avc'}, hardwareAcceleration: 'prefer-software'};
+      try{ if ((await VideoEncoder.isConfigSupported(c)).supported) sw = c; }catch(e){}
+    }
+    if (sw){
+      st.stage = 1; st.newVenc(sw);
+      $('nm').textContent = `${label}  video: ${why} -> software encoder`;
+    }else{
+      await mp4Abort(st);
+      $('nm').textContent = `mp4 video: ${why} -> webm`;
+      startWebm(true);
+    }
+    st.busy = false;
+    return;
+  }
+  if (st.vfail || (st.vout > 0 && st.vin > 0 && now - st.tOut > STALL_MS && now - st.tEnc > STALL_MS)){
+    const why = st.vfail || 'video stalled';
+    st.newVenc(st.vcfg);
+    $('nm').textContent = `${label}  ${why} -> encoder restarted`;
+    return;
+  }
+  $('nm').textContent = `${label}  v ${st.vout}` + (st.vdrop ? ` drop ${st.vdrop}` : '');
+}
+
+// stop the MP4 path without saving (no video in it)
+async function mp4Abort(st){
+  st.stopping = true;
+  clearInterval(st.wd);
+  for (const r of st.readers){ try{ await r.cancel(); }catch(e){} }
+  try{ st.venc.close(); }catch(e){}
+  if (st.aenc){ try{ st.aenc.close(); }catch(e){} }
+  if (mp4 === st) mp4 = null;
 }
 
 async function mp4Stop(){
   const st = mp4; if (!st) return;
   st.stopping = true;
+  clearInterval(st.wd);
   for (const r of st.readers){ try{ await r.cancel(); }catch(e){} }
   try{ await st.venc.flush(); }catch(e){}
   if (st.aenc){ try{ await st.aenc.flush(); }catch(e){} }
-  st.muxer.finalize();
-  const buf = st.muxer.target.buffer;
   mp4 = null;
-  saveBlob(new Blob([buf], {type: 'video/mp4'}), 'mp4');
+  if (st.vout === 0){                                      // never write an audio-only file named .mp4
+    $('nm').textContent = 'mp4: no video frames recorded - nothing saved';
+    return;
+  }
+  st.muxer.finalize();
+  saveBlob(new Blob([st.muxer.target.buffer], {type: 'video/mp4'}), 'mp4');
+  $('nm').textContent = `saved mp4  v ${st.vout}` + (st.vdrop ? ` drop ${st.vdrop}` : '');
+}
+
+// MediaRecorder WebM (fallback). keepT0: continue the running timer after an MP4 fallback
+function startWebm(keepT0){
+  const mime = pickMime();
+  try{ rec = new MediaRecorder(stream, mime ? {mimeType:mime} : undefined); }
+  catch(e){ $('nm').textContent = 'rec: ' + e.name; recUi(false); return; }
+  chunks = [];
+  const t0 = keepT0 ? recT0 : Date.now();
+  rec.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+  rec.onstop = async () => {
+    recUi(false);
+    if (!chunks.length) return;
+    const durMs = Date.now() - t0;
+    const type = rec.mimeType || 'video/webm';
+    const ext  = type.includes('mp4') ? 'mp4' : 'webm';
+    let blob = new Blob(chunks, {type});
+    if (ext === 'webm'){
+      try{
+        const fixed = fixWebmDuration(await blob.arrayBuffer(), durMs);
+        if (fixed) blob = new Blob([fixed], {type});
+      }catch(e){}
+    }
+    saveBlob(blob, ext);
+  };
+  rec.start(1000);
+  recT0 = t0;
+  recUi(true);
+  if (!keepT0) $('nm').textContent = 'rec ' + (rec.mimeType || 'webm');
 }
 
 $('btn_rec').onclick = async () => {
@@ -793,31 +902,7 @@ $('btn_rec').onclick = async () => {
       }
     }catch(e){ mp4 = null; $('nm').textContent = 'mp4: ' + e.message; }
   }
-
-  const mime = pickMime();
-  try{ rec = new MediaRecorder(stream, mime ? {mimeType:mime} : undefined); }
-  catch(e){ $('nm').textContent = 'rec: ' + e.name; return; }
-  chunks = [];
-  rec.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
-  rec.onstop = async () => {
-    recUi(false);
-    if (!chunks.length) return;
-    const durMs = Date.now() - recT0;
-    const type = rec.mimeType || 'video/webm';
-    const ext  = type.includes('mp4') ? 'mp4' : 'webm';
-    let blob = new Blob(chunks, {type});
-    if (ext === 'webm'){
-      try{
-        const fixed = fixWebmDuration(await blob.arrayBuffer(), durMs);
-        if (fixed) blob = new Blob([fixed], {type});
-      }catch(e){}
-    }
-    saveBlob(blob, ext);
-  };
-  rec.start(1000);
-  recT0 = Date.now();
-  recUi(true);
-  $('nm').textContent = 'rec ' + (rec.mimeType || 'webm');
+  startWebm(false);
 };
 
 setInterval(() => {
