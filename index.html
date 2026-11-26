@@ -118,7 +118,9 @@
   #s_ty::-webkit-slider-thumb{background:var(--pur)}
   #s_h::-webkit-slider-thumb{background:#79c0ff}
   #s_vr::-webkit-slider-thumb{background:var(--org)}
-  #s_vr{height:110px;touch-action:none}   /* taller touch area for the turn slider (track stays thin) */
+  /* turn / yaw: the whole middle panel is the touch area; the slider only displays the value */
+  .zone.mid{touch-action:none}
+  #s_vr,#s_ty{pointer-events:none}
   .tpad .knob.wk{background:#1f6feb55;border-color:var(--blue)}
 
   .val{font-size:.62rem;color:var(--txt)}
@@ -246,7 +248,7 @@ const WALK_UP   = 0.17;    // walk, seconds for 0 -> base MAX while held
 const WALK_DN   = 0.42;    // walk, seconds for base MAX -> 0 when released
 const TILT_FULL = 0.125;    // roll / pitch, seconds for 0 -> MAX (rate limit, held and released)
 const YAW_FULL  = 0.3;     // yaw slider, seconds for 0 -> MAX
-const APP_VER   = 'v41';
+const APP_VER   = 'v42';
 
 const VX_MAX = 350, VX_MIN = -350;   // mm/s
 const VZ_MAX = 400;                   // mm/s
@@ -428,7 +430,7 @@ function clearAll(){
   T.vx = T.vz = T.vr = T.tr = T.tp = T.ty = 0;
   S.vx = S.vz = S.vr = S.tr = S.tp = S.ty = 0;
   $('s_ty').value = 0; $('s_vr').value = 0;
-  tDrag = false; yDrag = false; wDrag = false; rDrag = false; wx = wy = rv = 0;
+  tDrag = false; yDrag = false; wDrag = false; rDrag = false; midDrag = false; wx = wy = rv = 0;
   knobTo(0, 0); wknobTo(0, 0);
 }
 function setMode(m){
@@ -521,10 +523,6 @@ wpad.addEventListener('pointermove', e => { if (wDrag){ e.preventDefault(); wFro
 const sv = $('s_vr');
 sv.min = -VR_MAX; sv.max = VR_MAX;
 let rDrag = false, rv = 0;
-sv.addEventListener('pointerdown', () => { rDrag = true; });
-sv.addEventListener('input', () => { rv = dz(-(+sv.value) / VR_MAX); });
-['pointerup','pointercancel','touchend','mouseup']
-  .forEach(ev => sv.addEventListener(ev, () => { rDrag = false; rv = 0; }));
 
 /* ---------------- 2d tilt pad ---------------- */
 $('ver').textContent = APP_VER;
@@ -557,10 +555,31 @@ tpad.addEventListener('pointermove', e => { if (tDrag){ e.preventDefault(); tFro
 const sy = $('s_ty');
 sy.min = -TY_MAX; sy.max = TY_MAX;   // keep the slider range tied to TY_MAX
 let yDrag = false;
-sy.addEventListener('pointerdown', () => { yDrag = true; });
-sy.addEventListener('input', () => { T.ty = +sy.value; });
-['pointerup','pointercancel','touchend','mouseup']
-  .forEach(ev => sy.addEventListener(ev, () => { yDrag = false; T.ty = 0; }));
+
+/* ---------------- middle panel: turn (walk) / yaw (tilt) ----------------
+   Touch anywhere in the panel; the finger's x along the slider sets the value and keeps tracking
+   (clamped at the ends) when it leaves the panel, release = back to 0. */
+const midZone = document.querySelector('.zone.mid');
+let midDrag = false;
+function midFromEvent(e){
+  const el = S.m === 0 ? sv : sy;
+  const r = el.getBoundingClientRect();
+  const th = 28;                                      // thumb width: its centre travels r.width - th
+  const u = clamp((e.clientX - r.left - th/2) / Math.max(r.width - th, 1), 0, 1) * 2 - 1;
+  if (S.m === 0){ rv = dz(-u); sv.value = Math.round(u * VR_MAX); }
+  else          { T.ty = Math.round(u * TY_MAX); sy.value = T.ty; }
+}
+midZone.addEventListener('pointerdown', e => {
+  if (jumpLock) return;
+  e.preventDefault(); midDrag = true;
+  midZone.setPointerCapture(e.pointerId);
+  if (S.m === 0) rDrag = true; else yDrag = true;
+  midFromEvent(e);
+});
+midZone.addEventListener('pointermove', e => { if (midDrag){ e.preventDefault(); midFromEvent(e); } });
+['pointerup','pointercancel','lostpointercapture'].forEach(ev => midZone.addEventListener(ev, () => {
+  midDrag = false; rDrag = false; yDrag = false; rv = 0; T.ty = 0;
+}));
 
 /* ---------------- height slider ---------------- */
 $('s_h').addEventListener('input', () => { S.h = +$('s_h').value; paint(); });
