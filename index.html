@@ -245,13 +245,12 @@ const WALK_UP   = 0.17;    // walk, seconds for 0 -> base MAX while held
 const WALK_DN   = 0.42;    // walk, seconds for base MAX -> 0 when released
 const TILT_FULL = 0.125;    // roll / pitch, seconds for 0 -> MAX (rate limit, held and released)
 const YAW_FULL  = 0.3;     // yaw slider, seconds for 0 -> MAX
-const APP_VER   = 'v38';
+const APP_VER   = 'v39';
 
 const VX_MAX = 350, VX_MIN = -350;   // mm/s
 const VZ_MAX = 400;                   // mm/s
 const VR_MAX = 92;         // deg/s (1.6 rad/s, keyboard tester / RL training range)
 const BOOST  = 800/350;    // vec_x 350 -> 800 mm/s with BOOST (both directions)
-const VZ_BOOST = 600;      // vec_z 400 -> 600 mm/s with BOOST (RL training range)
 
 const TR_MAX = 20;
 const TP_MAX = 14;
@@ -370,7 +369,7 @@ function tick(){
 
   if (S.m === 0){
     // walk pad: drag distance from the centre = speed (up = forward, left = +z); slider: turn rate
-    const hz = boost ? VZ_BOOST : VZ_MAX;
+    const hz = VZ_MAX;                    // side speed is not boosted
     T.vx = wDrag ? (wy > 0 ? wy * hi : -wy * lo) : 0;
     T.vz = wDrag ? -wx * hz : 0;
     T.vr = rDrag ? rv * VR_MAX : 0;
