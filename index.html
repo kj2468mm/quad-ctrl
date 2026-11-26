@@ -117,6 +117,8 @@
                     background:var(--blue);border:2px solid #0d1117}
   #s_ty::-webkit-slider-thumb{background:var(--pur)}
   #s_h::-webkit-slider-thumb{background:#79c0ff}
+  #s_vr::-webkit-slider-thumb{background:var(--org)}
+  .tpad .knob.wk{background:#1f6feb55;border-color:var(--blue)}
 
   .val{font-size:.62rem;color:var(--txt)}
   .out{font-size:0.55rem;color:var(--mut);line-height:1.7;
@@ -179,16 +181,14 @@
   <div class="zone left">
     <div class="zl" id="zl_left">방향  x / z</div>
 
-    <div class="pad" id="pan0">
-      <div></div>
-      <button data-k="up">▲</button>
-      <div></div>
-      <button data-k="lf">◀</button>
-      <div class="mid0">x z</div>
-      <button data-k="rt">▶</button>
-      <div></div>
-      <button data-k="dn">▼</button>
-      <div></div>
+    <div class="tpad" id="pan0">
+      <div class="ax axh"></div>
+      <div class="ax axv"></div>
+      <div class="cap t">x +</div>
+      <div class="cap b">x −</div>
+      <div class="cap l">z +</div>
+      <div class="cap r">z −</div>
+      <div class="knob wk" id="wknob"></div>
     </div>
 
     <div class="tpad hide" id="pan1">
@@ -202,12 +202,12 @@
     </div>
   </div>
 
-  <div class="zone mid">
+  <div class="zone mid wide">
     <div class="zl" id="zl_mid">회전  r</div>
 
-    <div class="turn" id="rot0">
-      <button data-k="ccw">↺</button>
-      <button data-k="cw">↻</button>
+    <div class="yw" id="rot0">
+      <input type="range" id="s_vr" min="-92" max="92" step="1" value="0">
+      <div class="ends"><span>↺</span><span>↻</span></div>
     </div>
 
     <div class="yw hide" id="rot1">
@@ -245,7 +245,7 @@ const WALK_UP   = 0.17;    // walk, seconds for 0 -> base MAX while held
 const WALK_DN   = 0.42;    // walk, seconds for base MAX -> 0 when released
 const TILT_FULL = 0.125;    // roll / pitch, seconds for 0 -> MAX (rate limit, held and released)
 const YAW_FULL  = 0.3;     // yaw slider, seconds for 0 -> MAX
-const APP_VER   = 'v37';
+const APP_VER   = 'v38';
 
 const VX_MAX = 350, VX_MIN = -350;   // mm/s
 const VZ_MAX = 400;                   // mm/s
@@ -257,6 +257,7 @@ const TR_MAX = 20;
 const TP_MAX = 14;
 const TY_MAX = 21;
 const AD_MAX = 300;        // tenths of a mm
+const DEAD   = 0.08;       // walk pad / turn slider dead zone (fraction of full scale)
 /* ================================================ */
 
 const S = {m:0, vx:0, vz:0, vr:0, tr:0, tp:0, ty:0, a:0, h:0};
@@ -368,10 +369,11 @@ function tick(){
   const lo = VX_MIN * (boost ? BOOST : 1);
 
   if (S.m === 0){
-    T.vx = (held.has('up') ? hi : 0) + (held.has('dn') ? lo : 0);
+    // walk pad: drag distance from the centre = speed (up = forward, left = +z); slider: turn rate
     const hz = boost ? VZ_BOOST : VZ_MAX;
-    T.vz = (held.has('lf') ?  hz : 0) + (held.has('rt') ? -hz : 0);
-    T.vr = (held.has('ccw') ? VR_MAX : 0) + (held.has('cw') ? -VR_MAX : 0);
+    T.vx = wDrag ? (wy > 0 ? wy * hi : -wy * lo) : 0;
+    T.vz = wDrag ? -wx * hz : 0;
+    T.vr = rDrag ? rv * VR_MAX : 0;
 
     const ku = 1 / (WALK_UP * TX_HZ), kd = 1 / (WALK_DN * TX_HZ);
     // slow down from the current limit in WALK_DN (BOOST speeds stop as fast as normal ones);
@@ -386,6 +388,9 @@ function tick(){
     S.vz = Math.round(clamp(fvz, -hz, hz));
     S.vr = Math.round(clamp(fvr, -VR_MAX, VR_MAX));
     S.tr = S.tp = S.ty = 0;
+    // knob and slider show the speed actually sent (ramped)
+    wknobTo(-S.vz / hz, S.vx >= 0 ? S.vx / hi : -S.vx / lo);
+    if (!rDrag) $('s_vr').value = -S.vr;
   }else{
     const k = 1 / (TILT_FULL * TX_HZ);     // fraction of MAX per frame
     ftr = slew(ftr, tDrag ? T.tr : 0, TR_MAX * k);
@@ -422,11 +427,9 @@ function clearAll(){
   fvx = fvz = fvr = ftr = ftp = fty = 0;
   T.vx = T.vz = T.vr = T.tr = T.tp = T.ty = 0;
   S.vx = S.vz = S.vr = S.tr = S.tp = S.ty = 0;
-  $('s_ty').value = 0;
-  held.clear(); tDrag = false; yDrag = false;
-  document.querySelectorAll('.pad button, .turn button')
-          .forEach(b => b.classList.remove('hit'));
-  knobTo(0, 0);
+  $('s_ty').value = 0; $('s_vr').value = 0;
+  tDrag = false; yDrag = false; wDrag = false; rDrag = false; wx = wy = rv = 0;
+  knobTo(0, 0); wknobTo(0, 0);
 }
 function setMode(m){
   if (jumpLock) return;
@@ -437,7 +440,7 @@ function setMode(m){
   $('pan1').classList.toggle('hide', m === 0);
   $('rot0').classList.toggle('hide', m !== 0);
   $('rot1').classList.toggle('hide', m === 0);
-  document.querySelector('.zone.mid').classList.toggle('wide', m === 1);
+  document.querySelector('.zone.mid').classList.add('wide');   // both modes use a slider
   $('zl_left').textContent = m === 0 ? '방향  x / z' : '틸트  roll / pitch';
   $('zl_mid').textContent  = m === 0 ? '회전  r'     : 'yaw';
   paint(); send(true);
@@ -461,7 +464,7 @@ function jumpCool(t0){
 }
 let jumpLock = false, jumpTimer = 0;
 function jumpReady(){
-  return S.m === 0 && !jumpLock && held.size === 0 && S.vx === 0 && S.vz === 0 && S.vr === 0;
+  return S.m === 0 && !jumpLock && !wDrag && !rDrag && S.vx === 0 && S.vz === 0 && S.vr === 0;
 }
 function jumpUi(){ jb.disabled = !jumpReady() && !jb.classList.contains('hold'); }
 function jumpCancel(){ clearTimeout(jumpTimer); jb.classList.remove('hold'); }
@@ -493,20 +496,35 @@ $('btn_boost').onclick = () => {
   paint();
 };
 
-/* ---------------- d-pad ---------------- */
-const held = new Set();
-document.querySelectorAll('.pad button[data-k], .turn button[data-k]')
-.forEach(b => {
-  const k = b.dataset.k;
-  const on  = e => { e.preventDefault(); b.setPointerCapture?.(e.pointerId);
-                     held.add(k); b.classList.add('hit'); };
-  const off = e => { e.preventDefault(); held.delete(k);
-                     b.classList.remove('hit'); };
-  b.addEventListener('pointerdown',   on);
-  b.addEventListener('pointerup',     off);
-  b.addEventListener('pointercancel', off);
-  b.addEventListener('pointerleave',  off);
+/* ---------------- walk pad (drag = proportional x / z speed, release = stop) ---------------- */
+const wpad = $('pan0'), wknob = $('wknob');
+let wDrag = false, wx = 0, wy = 0;
+function dz(v){ return Math.abs(v) < DEAD ? 0 : (v - Math.sign(v) * DEAD) / (1 - DEAD); }
+function wknobTo(nx, ny){
+  wknob.style.left = (50 + nx*40) + '%';
+  wknob.style.top  = (50 - ny*40) + '%';
+}
+function wFromEvent(e){
+  const r = wpad.getBoundingClientRect();
+  wx = dz(clamp((e.clientX - r.left) / r.width  * 2 - 1, -1, 1));
+  wy = dz(clamp(1 - (e.clientY - r.top) / r.height * 2, -1, 1));
+}
+wpad.addEventListener('pointerdown', e => {
+  e.preventDefault(); wDrag = true;
+  wpad.setPointerCapture(e.pointerId); wFromEvent(e);
 });
+wpad.addEventListener('pointermove', e => { if (wDrag){ e.preventDefault(); wFromEvent(e); } });
+['pointerup','pointercancel','pointerleave'].forEach(ev =>
+  wpad.addEventListener(ev, () => { wDrag = false; wx = wy = 0; }));
+
+/* ---------------- turn slider (left = counter-clockwise, springs back to 0) ---------------- */
+const sv = $('s_vr');
+sv.min = -VR_MAX; sv.max = VR_MAX;
+let rDrag = false, rv = 0;
+sv.addEventListener('pointerdown', () => { rDrag = true; });
+sv.addEventListener('input', () => { rv = dz(-(+sv.value) / VR_MAX); });
+['pointerup','pointercancel','touchend','mouseup']
+  .forEach(ev => sv.addEventListener(ev, () => { rDrag = false; rv = 0; }));
 
 /* ---------------- 2d tilt pad ---------------- */
 $('ver').textContent = APP_VER;
