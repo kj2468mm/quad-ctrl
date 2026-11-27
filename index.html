@@ -122,6 +122,10 @@
   .zone.mid{touch-action:none}
   #s_vr,#s_ty{pointer-events:none}
   .tpad .knob.wk{background:#1f6feb55;border-color:var(--blue)}
+  /* BOOST on: orange frame around the walk pad (1 px border + 2 px inset) */
+  .tpad.boost{border-color:var(--org);box-shadow:inset 0 0 0 2px var(--org)}
+  .odo{font-size:.6rem;color:var(--mut);white-space:nowrap}
+  .odo.live{color:var(--grn)}
 
   .val{font-size:.62rem;color:var(--txt)}
   .out{font-size:0.55rem;color:var(--mut);line-height:1.7;
@@ -203,6 +207,7 @@
       <div class="cap r">roll −</div>
       <div class="knob" id="knob"></div>
     </div>
+    <div class="odo" id="v_odo">speed --</div>
   </div>
 
   <div class="zone mid wide">
@@ -248,7 +253,7 @@ const WALK_UP   = 0.17;    // walk, seconds for 0 -> base MAX while held
 const WALK_DN   = 0.42;    // walk, seconds for base MAX -> 0 when released
 const TILT_FULL = 0.125;    // roll / pitch, seconds for 0 -> MAX (rate limit, held and released)
 const YAW_FULL  = 0.3;     // yaw slider, seconds for 0 -> MAX
-const APP_VER   = 'v42';
+const APP_VER   = 'v43';
 
 const VX_MAX = 350, VX_MIN = -350;   // mm/s
 const VZ_MAX = 400;                   // mm/s
@@ -266,7 +271,8 @@ const S = {m:0, vx:0, vz:0, vr:0, tr:0, tp:0, ty:0, a:0, h:0};
 const T = {vx:0, vz:0, vr:0, tr:0, tp:0, ty:0};   // ramp targets
 
 let boost = false;
-let dev = null, rxc = null, connected = false;
+let dev = null, rxc = null, txc = null, connected = false;
+let odoVx = 0, odoVy = 0, odoT = -1e9, telBuf = '';   // leg odometry from the Pi (RL21 telemetry)
 let txBusy = false, txPend = false, lastStr = '';
 let txLen = 0, txErr = 0, txErrMsg = '';
 const BLE_CHUNK = 20;      // max bytes per BLE write (ATT MTU 23 - 3)
@@ -302,6 +308,29 @@ window.addEventListener('resize', sizeV);
 /* ---------------- BLE ---------------- */
 const SVC = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
 const RXC = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
+const TXC = '6e400003-b5a3-f393-e0a9-e50e24dcca9e';   // notify: lines from the Pi through the bridge
+
+/* telemetry line <O,vx_mm,vy_mm*CS> (XOR checksum of the body, same as the command lines) */
+function onTel(ev){
+  telBuf += new TextDecoder().decode(ev.target.value);
+  let i;
+  while ((i = telBuf.indexOf('\n')) >= 0){
+    const line = telBuf.slice(0, i).trim();
+    telBuf = telBuf.slice(i + 1);
+    const st = line.indexOf('*');
+    if (line[0] !== '<' || st < 0) continue;
+    const body = line.slice(1, st);
+    let c = 0;
+    for (const ch of body) c ^= ch.charCodeAt(0);
+    if (c !== parseInt(line.slice(st + 1, st + 3), 16)) continue;
+    const p = body.split(',');
+    if (p[0] === 'O' && p.length >= 3){
+      odoVx = parseInt(p[1], 10) / 1000; odoVy = parseInt(p[2], 10) / 1000;
+      odoT = performance.now();
+    }
+  }
+  if (telBuf.length > 256) telBuf = '';
+}
 
 async function connect(){
   if (!navigator.bluetooth){
@@ -318,6 +347,11 @@ async function connect(){
     const srv = await dev.gatt.connect();
     const s   = await srv.getPrimaryService(SVC);
     rxc = await s.getCharacteristic(RXC);
+    try{                                    // optional: older bridges have no notify path
+      txc = await s.getCharacteristic(TXC);
+      txc.addEventListener('characteristicvaluechanged', onTel);
+      await txc.startNotifications();
+    }catch(e){ txc = null; }
     connected = true;
     $('dot').classList.add('on');
     $('nm').textContent = dev.name || 'connected';
@@ -327,7 +361,7 @@ async function connect(){
   }
 }
 function onDrop(){
-  connected = false; rxc = null;
+  connected = false; rxc = null; txc = null; telBuf = '';
   $('dot').classList.remove('on');
   $('nm').textContent = 'disconnected';
   $('btn_conn').textContent = '연결';
@@ -422,6 +456,12 @@ function paint(){
       : `틸트  roll ${S.tr}  pitch ${S.tp}  yaw ${S.ty}  h ${(S.h/10).toFixed(1)}mm`;
   if (connected)
     $('out').textContent += `   tx ${txLen}B` + (txErr ? `  err ${txErr} ${txErrMsg}` : '');
+  // measured speed (leg odometry on the Pi), shown while lines arrive
+  const live = connected && performance.now() - odoT < 1500;
+  $('v_odo').classList.toggle('live', live);
+  $('v_odo').textContent = live
+    ? `speed ${odoVx.toFixed(2)} m/s` + (Math.abs(odoVy) >= 0.05 ? `  side ${odoVy.toFixed(2)}` : '')
+    : (connected && !txc ? 'speed -- (no notify)' : 'speed --');
 }
 
 /* ---------------- mode ---------------- */
@@ -495,6 +535,7 @@ setInterval(jumpUi, 100);
 $('btn_boost').onclick = () => {
   boost = !boost;
   $('btn_boost').classList.toggle('on', boost);
+  $('pan0').classList.toggle('boost', boost);
   paint();
 };
 
