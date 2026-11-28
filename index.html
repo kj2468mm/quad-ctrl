@@ -142,11 +142,19 @@
   #btn_jump:disabled{opacity:.35;border-color:var(--line);color:inherit}
   #btn_jump .cool{position:absolute;inset:0;background:#58a6ff40;transform:scaleX(0);transform-origin:left}
   #btn_jump.cooling:disabled{opacity:1;border-color:#58a6ff;color:#58a6ff}
+  /* emotes (v44): wave / bow one-shot (a = 2 / 3 pulse), sit toggle (a = 4 while on) */
+  .emo{display:flex;flex-direction:column;gap:4px;width:100%;margin-top:4px}
+  .emo button{width:100%;padding:8px 0;font-weight:700;border-radius:8px;white-space:nowrap;
+              border:1px solid #a371f7;color:#a371f7;background:transparent}
+  .emo button.go{background:#a371f7;color:#0d1117}
+  .emo button:disabled{opacity:.35;border-color:var(--line);color:inherit}
   body.locked .seg, body.locked #btn_boost, body.locked .pad, body.locked .turn,
   body.locked .tpad, body.locked .yw, body.locked .vwrap, body.locked #btn_h0{pointer-events:none;opacity:.35}
   @media (orientation:landscape){
     .hrow{flex-wrap:wrap}
     #btn_jump{flex:1 0 100%;margin-top:0}
+    .emo{flex:1 0 100%;margin-top:0}
+    .emo button{padding:6px 0}
     .mid.wide{width:200px}               /* yaw slider ~1.6x */
     .zone{min-height:0;padding:8px}
     .vwrap{min-height:40px}
@@ -236,7 +244,12 @@
     <div class="hrow">
       <div class="val" id="v_h">0.0</div>
       <button id="btn_h0" style="width:100%;padding:6px 0">0</button>
-      <button id="btn_jump"><i class="fill"></i><i class="cool"></i><span>점프</span></button>
+      <button id="btn_jump" class="hide"><i class="fill"></i><i class="cool"></i><span>점프</span></button>
+      <div class="emo">
+        <button id="e_wave">손</button>
+        <button id="e_bow">인사</button>
+        <button id="e_sit">앉기</button>
+      </div>
     </div>
   </div>
 
@@ -253,7 +266,7 @@ const WALK_UP   = 0.17;    // walk, seconds for 0 -> base MAX while held
 const WALK_DN   = 0.42;    // walk, seconds for base MAX -> 0 when released
 const TILT_FULL = 0.125;    // roll / pitch, seconds for 0 -> MAX (rate limit, held and released)
 const YAW_FULL  = 0.3;     // yaw slider, seconds for 0 -> MAX
-const APP_VER   = 'v43';
+const APP_VER   = 'v44';
 
 const VX_MAX = 350, VX_MIN = -350;   // mm/s
 const VZ_MAX = 400;                   // mm/s
@@ -475,6 +488,7 @@ function clearAll(){
 }
 function setMode(m){
   if (jumpLock) return;
+  sitOff();
   S.m = m; clearAll();
   $('m0').classList.toggle('sel', m === 0);
   $('m1').classList.toggle('sel', m === 1);
@@ -489,7 +503,7 @@ function setMode(m){
 }
 $('m0').onclick = () => setMode(0);
 $('m1').onclick = () => setMode(1);
-$('btn_stop').onclick = () => { clearAll(); paint(); send(true); };
+$('btn_stop').onclick = () => { sitOff(); clearAll(); paint(); send(true); };
 $('btn_h0').onclick = () => { S.h = 0; $('s_h').value = 0; paint(); send(true); };
 
 /* ---------------- jump: hold 0.5 s, then a = 1 pulse and a 1.5 s lock ---------------- */
@@ -532,6 +546,40 @@ jb.addEventListener('pointerdown', e => {
 });
 ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => jb.addEventListener(ev, jumpCancel));
 setInterval(jumpUi, 100);
+
+/* ---------------- emotes (Pi RL23): a = 2 wave, 3 bow (0.4 s pulse), 4 sit (while toggled on) ----------------
+   The Pi starts an emote only after the robot has stood still for 1 s in walk mode and ignores the walk pad
+   while it runs; sit stands up again when the toggle goes off (after at least 3.5 s). */
+const EMO_PULSE = 0.4;   // s
+let sitOn = false, emoTimer = 0;
+const eWave = $('e_wave'), eBow = $('e_bow'), eSit = $('e_sit');
+function emoReady(){ return S.m === 0 && !jumpLock && !sitOn && S.a === 0; }
+function emoUi(){
+  eWave.disabled = eBow.disabled = !emoReady() && !eWave.classList.contains('go') && !eBow.classList.contains('go');
+  eSit.disabled = S.m !== 0 || (S.a !== 0 && S.a !== 4);
+  eSit.classList.toggle('go', sitOn);
+}
+function emoPulse(code, btn){
+  if (!emoReady()) return;
+  clearAll();
+  S.a = code; btn.classList.add('go'); paint(); send(true);
+  clearTimeout(emoTimer);
+  emoTimer = setTimeout(() => { S.a = 0; btn.classList.remove('go'); paint(); send(true); emoUi(); }, EMO_PULSE*1000);
+  emoUi();
+}
+function sitOff(){
+  if (!sitOn) return;
+  sitOn = false; if (S.a === 4) S.a = 0; emoUi();
+}
+eWave.onclick = () => emoPulse(2, eWave);
+eBow.onclick  = () => emoPulse(3, eBow);
+eSit.onclick  = () => {
+  if (S.m !== 0) return;
+  if (sitOn){ sitOff(); }
+  else if (S.a === 0){ clearAll(); sitOn = true; S.a = 4; }
+  emoUi(); paint(); send(true);
+};
+setInterval(emoUi, 100);
 $('btn_boost').onclick = () => {
   boost = !boost;
   $('btn_boost').classList.toggle('on', boost);
